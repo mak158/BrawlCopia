@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    <title>Brawl Stars JS</title>
+    <style>
+        :root { --gold: #fbc531; --blue: #273c75; --green: #4cd137; --red: #e84118; }
+        body { 
+            margin: 0; font-family: 'Arial Black', sans-serif; background: #1e272e; 
+            color: white; overflow: hidden; user-select: none; touch-action: none; 
+        }
+        
+        /* ИНТЕРФЕЙС МЕНЮ */
+        #menu { position: fixed; inset: 0; background: linear-gradient(135deg, #192a56, #273c75); z-index: 100; display: flex; flex-direction: column; align-items: center; padding: env(safe-area-inset-top) 10px; }
+        .top-bar { width: 100%; display: flex; justify-content: space-around; padding: 10px 0; }
+        .stat { background: rgba(0,0,0,0.6); padding: 8px 15px; border-radius: 20px; border: 2px solid var(--gold); font-size: 16px; }
+        
+        .char-select { 
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; 
+            margin: 15px 0; overflow-y: auto; width: 95%; max-width: 800px; max-height: 50vh;
+            padding: 10px;
+        }
+        .char-card { 
+            background: #487eb0; padding: 10px; border-radius: 12px; text-align: center; 
+            font-size: 12px; border: 4px solid transparent; transition: 0.2s;
+        }
+        .char-card.active { border-color: var(--gold); background: #40739e; transform: scale(1.05); }
+        .char-card.locked { opacity: 0.3; filter: grayscale(1); }
+
+        .btn-group { margin-top: auto; display: flex; gap: 15px; width: 100%; justify-content: center; padding-bottom: 40px; }
+        .big-btn { 
+            padding: 15px 30px; font-size: 20px; border-radius: 15px; border: none; 
+            font-weight: bold; text-transform: uppercase; cursor: pointer;
+        }
+        .btn-play { background: var(--green); color: white; box-shadow: 0 5px 0 #2d8e20; }
+        .btn-box { background: var(--gold); color: #333; box-shadow: 0 5px 0 #c7a020; }
+
+        /* ИГРОВАЯ ЗОНА */
+        #game-canvas { display: none; background: #3b7d32; cursor: crosshair; }
+        
+        /* МОБИЛЬНЫЙ ДЖОЙСТИК */
+        #joystick-container {
+            position: fixed; bottom: 60px; left: 60px; width: 100px; height: 100px;
+            background: rgba(255,255,255,0.1); border-radius: 50%; display: none; z-index: 60;
+            border: 2px solid rgba(255,255,255,0.2);
+        }
+        #joystick-knob {
+            position: absolute; top: 25px; left: 25px; width: 50px; height: 50px;
+            background: white; border-radius: 50%; opacity: 0.5;
+        }
+
+        #drop-screen { 
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); 
+            z-index: 200; flex-direction: column; align-items: center; justify-content: center; 
+        }
+    </style>
+</head>
+<body>
+
+<div id="menu">
+    <div class="top-bar">
+        <div class="stat">💰 <span id="coins-txt">0</span></div>
+        <div class="stat">БОЙЦЫ: <span id="chars-txt">1/8</span></div>
+    </div>
+    <div class="char-select" id="char-list"></div>
+    <div class="btn-group">
+        <button class="big-btn btn-box" onclick="openBox()">ЯЩИК</button>
+        <button class="big-btn btn-play" onclick="startGame()">В БОЙ!</button>
+    </div>
+</div>
+
+<div id="drop-screen" onclick="this.style.display='none'">
+    <h1 style="color:var(--gold)">НОВЫЙ БОЕЦ!</h1>
+    <div id="drop-emoji" style="font-size: 100px;"></div>
+    <h2 id="drop-name"></h2>
+    <p>Нажми, чтобы закрыть</p>
+</div>
+
+<canvas id="game-canvas"></canvas>
+<div id="joystick-container"><div id="joystick-knob"></div></div>
+
+<script>
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+const knob = document.getElementById('joystick-knob');
+const joyContainer = document.getElementById('joystick-container');
+
+// Данные
+let coins = parseInt(localStorage.getItem('brawl_coins_v4')) || 100;
+let owned = JSON.parse(localStorage.getItem('brawl_owned_v4')) || [0];
+let selected = 0;
+let gameOn = false;
+
+const brawlers = [
+    { name: "ШЕЛЛИ", emoji: "🤠", type: "shotgun", dmg: 18, hp: 150, color: "#f1c40f" },
+    { name: "КОЛЬТ", emoji: "🔫", type: "burst", dmg: 12, hp: 100, color: "#3498db" },
+    { name: "ПРИМО", emoji: "💪", type: "melee", dmg: 45, hp: 250, color: "#e74c3c" },
+    { name: "ПОКО", emoji: "🎸", type: "wave", dmg: 30, hp: 140, color: "#9b59b6" },
+    { name: "СПАЙК", emoji: "🌵", type: "spike", dmg: 40, hp: 80, color: "#2ecc71" },
+    { name: "БРОК", emoji: "🚀", type: "rocket", dmg: 55, hp: 110, color: "#e67e22" },
+    { name: "НИТА", emoji: "🐻", type: "wave", dmg: 35, hp: 160, color: "#d35400" },
+    { name: "КРОУ", emoji: "🦅", type: "crow", dmg: 15, hp: 90, color: "#2c3e50" }
+];
+
+// Управление
+let keys = {};
+let moveX = 0, moveY = 0, isJoyActive = false;
+
+window.onkeydown = (e) => keys[e.code] = true;
+window.onkeyup = (e) => keys[e.code] = false;
+
+if ('ontouchstart' in window) {
+    joyContainer.style.display = 'block';
+    joyContainer.addEventListener('touchstart', () => isJoyActive = true);
+    document.addEventListener('touchmove', (e) => {
+        if (!isJoyActive) return;
+        const touch = e.touches[0];
+        const rect = joyContainer.getBoundingClientRect();
+        const dx = touch.clientX - (rect.left + 50);
+        const dy = touch.clientY - (rect.top + 50);
+        const dist = Math.min(Math.hypot(dx, dy), 50);
+        const angle = Math.atan2(dy, dx);
+        moveX = Math.cos(angle) * (dist / 50);
+        moveY = Math.sin(angle) * (dist / 50);
+        knob.style.transform = `translate(${moveX * 30}px, ${moveY * 30}px)`;
+    });
+    document.addEventListener('touchend', () => {
+        isJoyActive = false; moveX = 0; moveY = 0;
+        knob.style.transform = `translate(0,0)`;
+    });
+}
+
+const shoot = (x, y) => {
+    if (!gameOn) return;
+    const angle = Math.atan2(y - player.y, x - player.x);
+    const p = brawlers[selected];
+    if(p.type === "shotgun") for(let i=-2; i<=2; i++) fire(angle+i*0.2, 10, 20, 6);
+    else if(p.type === "burst") for(let i=0; i<4; i++) setTimeout(() => gameOn && fire(angle, 16, 40, 4), i*100);
+    else fire(angle, 10, 30, 8);
+};
+
+window.onmousedown = (e) => shoot(e.clientX, e.clientY);
+window.addEventListener('touchstart', (e) => {
+    if (e.target.closest('#joystick-container') || e.target.closest('.big-btn')) return;
+    shoot(e.touches[0].clientX, e.touches[0].clientY);
+});
+
+function fire(angle, speed, life, size) {
+    bullets.push({ x: player.x, y: player.y, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, life, size, color: brawlers[selected].color });
+}
+
+let player = {}, enemies = [], bullets = [];
+
+function startGame() {
+    gameOn = true;
+    document.getElementById('menu').style.display = 'none';
+    canvas.style.display = 'block';
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    player = { x: canvas.width/2, y: canvas.height/2, ...brawlers[selected] };
+    enemies = [];
+    for(let i=0; i<4; i++) enemies.push({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, hp: 100 });
+    requestAnimationFrame(update);
+}
+
+function update() {
+    if(!gameOn) return;
+    ctx.fillStyle = "#3b7d32";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let vx = 0, vy = 0;
+    if(keys['KeyW']) vy = -1; if(keys['KeyS']) vy = 1;
+    if(keys['KeyA']) vx = -1; if(keys['KeyD']) vx = 1;
+    if(vx === 0 && vy === 0) { vx = moveX; vy = moveY; }
+
+    player.x += vx * 4; player.y += vy * 4;
+    player.x = Math.max(20, Math.min(canvas.width-20, player.x));
+    player.y = Math.max(20, Math.min(canvas.height-20, player.y));
+
+    ctx.font = "40px Arial";
+    ctx.fillText(player.emoji, player.x-20, player.y+15);
+
+    bullets.forEach((b, i) => {
+        b.x += b.vx; b.y += b.vy; b.life--;
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.size, 0, Math.PI*2); ctx.fill();
+        enemies.forEach((en, ei) => {
+            if(Math.hypot(b.x-en.x, b.y-en.y) < 30) {
+                en.hp -= player.dmg; b.life = 0;
+                if(en.hp <= 0) { enemies.splice(ei, 1); coins += 20; }
+            }
+        });
+        if(b.life <= 0) bullets.splice(i, 1);
+    });
+
+    enemies.forEach(en => {
+        ctx.fillText("🤖", en.x-20, en.y+15);
+        let d = Math.hypot(player.x-en.x, player.y-en.y);
+        en.x += (player.x-en.x)/d * 1.5; en.y += (player.y-en.y)/d * 1.5;
+        if(d < 30) { gameOn = false; alert("GAME OVER"); location.reload(); }
+    });
+
+    if(enemies.length === 0) { gameOn = false; alert("WIN!"); coins += 100; save(); location.reload(); }
+    requestAnimationFrame(update);
+}
+
+function renderMenu() {
+    document.getElementById('coins-txt').innerText = coins;
+    document.getElementById('chars-txt').innerText = `${owned.length}/8`;
+    const list = document.getElementById('char-list');
+    list.innerHTML = '';
+    brawlers.forEach((b, i) => {
+        const card = document.createElement('div');
+        card.className = `char-card ${!owned.includes(i)?'locked':''} ${selected===i?'active':''}`;
+        card.innerHTML = `<div style="font-size:30px">${b.emoji}</div><b>${b.name}</b>`;
+        card.onclick = () => { if(owned.includes(i)) { selected = i; renderMenu(); }};
+        list.appendChild(card);
+    });
+}
+
+function openBox() {
+    if(coins < 50) return;
+    coins -= 50;
+    let locked = brawlers.map((_,i)=>i).filter(i=>!owned.includes(i));
+    if(Math.random()>0.7 && locked.length>0) {
+        let win = locked[Math.floor(Math.random()*locked.length)];
+        owned.push(win);
+        document.getElementById('drop-emoji').innerText = brawlers[win].emoji;
+        document.getElementById('drop-name').innerText = brawlers[win].name;
+        document.getElementById('drop-screen').style.display = 'flex';
+    } else coins += 35;
+    save(); renderMenu();
+}
+
+function save() {
+    localStorage.setItem('brawl_coins_v4', coins);
+    localStorage.setItem('brawl_owned_v4', JSON.stringify(owned));
+}
+
+renderMenu();
+</script>
+</body>
+</html>
